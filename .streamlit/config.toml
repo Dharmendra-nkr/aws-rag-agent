@@ -1,0 +1,4 @@
+[server]
+# On EC2, Streamlit's watcher can crawl large ML dependency trees and trip over
+# optional imports like torchvision. Disabling it keeps reruns stable for this app.
+fileWatcherType = "none"
