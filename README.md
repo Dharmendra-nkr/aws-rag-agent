@@ -11,7 +11,7 @@ It can be used either from the terminal (`voice_agent.py`) or from a Streamlit w
 - LLM generates an answer from the retrieved context.
 - TTS turns the final answer into a voiceover using ElevenLabs.
 - Console output stays visible so you can follow recording, transcription, retrieval, and answer generation step by step.
-
+- nginx - certbot - systemmd
 ## Setup
 
 1. Create and activate a Python environment.
