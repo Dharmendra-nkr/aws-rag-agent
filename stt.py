@@ -4,7 +4,8 @@ Functions:
 - `record_audio(output_path, duration, sample_rate)` : record a short WAV file
 - `transcribe_audio(path, model_size, device, language)` : transcribe audio to text
 
-This module keeps dependencies minimal: `faster-whisper`, `sounddevice`, `scipy`, `numpy`.
+This module keeps dependencies minimal: `faster-whisper`, `scipy`, `numpy`.
+`sounddevice` is only required for the local CLI microphone recording path.
 """
 from __future__ import annotations
 
@@ -15,7 +16,6 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-import sounddevice as sd
 from scipy.io import wavfile
 from scipy import signal
 
@@ -24,6 +24,15 @@ _WHISPER_MODELS: dict[str, object] = {}
 
 def _resolve_input_device(input_device: int | None = None) -> int:
     """Return a PortAudio input device index with at least one input channel."""
+    try:
+        import sounddevice as sd
+    except Exception as exc:  # pragma: no cover - runtime dependency
+        raise RuntimeError(
+            "sounddevice/PortAudio is required only for microphone recording. "
+            "Install PortAudio on this machine, or use the Streamlit text/audio-upload "
+            "options instead."
+        ) from exc
+
     devices = sd.query_devices()
 
     if input_device is not None:
@@ -58,6 +67,15 @@ def record_audio(
 
     Returns the path to the written WAV file.
     """
+    try:
+        import sounddevice as sd
+    except Exception as exc:  # pragma: no cover - runtime dependency
+        raise RuntimeError(
+            "sounddevice/PortAudio is required only for microphone recording. "
+            "Install PortAudio on this machine, or use the Streamlit text/audio-upload "
+            "options instead."
+        ) from exc
+
     output_path = str(output_path)
     try:
         frames = int(duration * sample_rate)
