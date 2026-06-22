@@ -1,8 +1,8 @@
 """Streamlit frontend for the RAG Voice Agent.
 
 Two tabs:
-  1. Upload   - upload PDFs/images, chunk them, and index them into Pinecone.
-  2. Voice Agent - record a question with the browser mic, transcribe it,
+  1. Upload - upload PDFs/images, chunk them, and index them into Pinecone.
+  2. Ask the agent - ask by browser mic, uploaded audio, or direct text,
      retrieve context from Pinecone, answer with the LLM, and speak the
      answer back using ElevenLabs.
 
@@ -33,6 +33,48 @@ def _save_upload_to_temp(uploaded_file) -> Path:
     tmp.write(uploaded_file.getbuffer())
     tmp.close()
     return Path(tmp.name)
+
+
+def _render_answer(
+    query: str,
+    *,
+    top_k: int,
+    use_tts: bool,
+    query_label: str,
+) -> None:
+    query = query.strip()
+    if not query:
+        st.warning("Please enter a question first.")
+        return
+
+    st.markdown(f"**{query_label}** {query}")
+
+    with st.spinner("Retrieving context and generating an answer..."):
+        try:
+            contexts = rag_pipeline.retrieve_context(query, top_k=top_k, namespace=NAMESPACE)
+            answer = rag_pipeline.answer_query(query, top_k=top_k, namespace=NAMESPACE, contexts=contexts)
+        except Exception as exc:
+            st.error(f"Could not get an answer: {exc}")
+            return
+
+    st.markdown("**Answer:**")
+    st.write(answer)
+
+    with st.expander("Retrieved chunks (for debugging)"):
+        if contexts:
+            for item in contexts:
+                st.caption(f"{item['source']} · chunk {item['chunk_index']} · score {item['score']:.4f}")
+                st.text(item["text"])
+        else:
+            st.write("No chunks were retrieved. Have you indexed any documents yet?")
+
+    if use_tts:
+        with st.spinner("Generating voice answer..."):
+            try:
+                audio_bytes = voice_agent.synthesize_speech(answer)
+                st.audio(audio_bytes, format="audio/wav")
+            except RuntimeError as exc:
+                st.warning(str(exc))
 
 
 def render_upload_tab() -> None:
@@ -89,7 +131,7 @@ def render_upload_tab() -> None:
             "- Image text is extracted with OCR (Tesseract), so scanned text and "
             "photos of documents work, but results depend on image quality.\n"
             "- Image OCR requires the Tesseract binary installed on this machine "
-            "(separate from the `pytesseract` pip package) — see the README.\n"
+            "(separate from the `pytesseract` pip package) - see the README.\n"
             "- Re-uploading a file with the same name will add new vectors rather "
             "than overwrite the old ones unless the chunk IDs match exactly."
         )
@@ -98,8 +140,12 @@ def render_upload_tab() -> None:
 def render_voice_tab() -> None:
     st.header("Ask the agent")
     st.write(
-        "Record your question, and the agent will transcribe it, retrieve the most "
-        "relevant chunks from your uploaded documents, and answer with the LLM."
+        "Ask by browser mic, by uploading an audio clip, or by typing directly. "
+        "All three paths use the same server-side retrieval and answer pipeline."
+    )
+    st.caption(
+        "If microphone capture is unavailable in your AWS deployment, use the audio upload "
+        "or text input path and the request will still be processed on the server."
     )
 
     col1, col2 = st.columns(2)
@@ -107,6 +153,54 @@ def render_voice_tab() -> None:
         top_k = st.slider("Chunks to retrieve", min_value=1, max_value=10, value=5)
     with col2:
         use_tts = st.checkbox("Speak the answer (ElevenLabs)", value=True)
+
+    mode = st.radio(
+        "Input mode",
+        ["Voice", "Audio upload", "Text"],
+        horizontal=True,
+        index=0,
+    )
+
+    if mode == "Text":
+        question = st.text_area(
+            "Type your question",
+            height=120,
+            placeholder="Ask about the documents you indexed...",
+        )
+        ask = st.button("Ask", type="primary", disabled=not question.strip())
+        if ask:
+            _render_answer(question, top_k=top_k, use_tts=use_tts, query_label="You typed:")
+        return
+
+    if mode == "Audio upload":
+        audio_file = st.file_uploader(
+            "Upload an audio file",
+            type=["wav", "mp3", "m4a", "ogg", "webm", "flac"],
+            accept_multiple_files=False,
+        )
+        if audio_file is not None:
+            st.audio(audio_file)
+            if st.button("Transcribe and answer", type="primary"):
+                suffix = Path(audio_file.name).suffix or ".wav"
+                with st.spinner("Transcribing..."):
+                    try:
+                        transcript = stt.transcribe_audio_bytes(
+                            audio_file.getvalue(),
+                            suffix=suffix,
+                        )
+                    except Exception as exc:
+                        st.error(f"Transcription failed: {exc}")
+                        return
+
+                if not transcript:
+                    st.warning(
+                        "No speech was detected. Try a clearer recording, a longer clip, "
+                        "or upload a better-quality audio file."
+                    )
+                    return
+
+                _render_answer(transcript, top_k=top_k, use_tts=use_tts, query_label="You said:")
+        return
 
     audio_value = st.audio_input("Click to record your question")
 
@@ -116,7 +210,11 @@ def render_voice_tab() -> None:
         if st.button("Transcribe and answer", type="primary"):
             with st.spinner("Transcribing..."):
                 try:
-                    transcript = stt.transcribe_audio_bytes(audio_value.getvalue())
+                    suffix = Path(getattr(audio_value, "name", "recording.wav")).suffix or ".wav"
+                    transcript = stt.transcribe_audio_bytes(
+                        audio_value.getvalue(),
+                        suffix=suffix,
+                    )
                 except Exception as exc:
                     st.error(f"Transcription failed: {exc}")
                     return
@@ -128,43 +226,12 @@ def render_voice_tab() -> None:
                 )
                 return
 
-            st.markdown(f"**You asked:** {transcript}")
-
-            with st.spinner("Retrieving context and generating an answer..."):
-                try:
-                    contexts = rag_pipeline.retrieve_context(
-                        transcript, top_k=top_k, namespace=NAMESPACE
-                    )
-                    answer = rag_pipeline.answer_query(
-                        transcript, top_k=top_k, namespace=NAMESPACE, contexts=contexts
-                    )
-                except Exception as exc:
-                    st.error(f"Could not get an answer: {exc}")
-                    return
-
-            st.markdown("**Answer:**")
-            st.write(answer)
-
-            with st.expander("Retrieved chunks (for debugging)"):
-                if contexts:
-                    for item in contexts:
-                        st.caption(f"{item['source']} · chunk {item['chunk_index']} · score {item['score']:.4f}")
-                        st.text(item["text"])
-                else:
-                    st.write("No chunks were retrieved. Have you indexed any documents yet?")
-
-            if use_tts:
-                with st.spinner("Generating voice answer..."):
-                    try:
-                        audio_bytes = voice_agent.synthesize_speech(answer)
-                        st.audio(audio_bytes, format="audio/wav")
-                    except RuntimeError as exc:
-                        st.warning(str(exc))
+            _render_answer(transcript, top_k=top_k, use_tts=use_tts, query_label="You said:")
 
 
 def main() -> None:
-    st.title("🎙️ RAG Voice Agent")
-    upload_tab, voice_tab = st.tabs(["📤 Upload", "🎤 Voice Agent"])
+    st.title("RAG Voice Agent")
+    upload_tab, voice_tab = st.tabs(["Upload", "Ask the agent"])
 
     with upload_tab:
         render_upload_tab()

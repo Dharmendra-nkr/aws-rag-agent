@@ -157,6 +157,49 @@ def transcribe_audio(path: str, model_size: str = "small", device: str = "cpu", 
     return text.strip()
 
 
+def transcribe_audio_file(
+    path: str,
+    model_size: str = "small",
+    device: str = "cpu",
+    language: Optional[str] = None,
+) -> str:
+    """Transcribe an audio file from disk.
+
+    WAV files go through the existing normalization path. Other formats are passed
+    directly to faster-whisper so browser-recorded uploads such as WebM can still
+    be handled when ffmpeg is available on the host.
+    """
+    suffix = Path(path).suffix.lower()
+    if suffix in {".wav"}:
+        return transcribe_audio(path, model_size=model_size, device=device, language=language)
+
+    try:
+        from faster_whisper import WhisperModel
+    except Exception as exc:  # pragma: no cover - runtime dependency
+        raise RuntimeError("faster-whisper is required for transcription") from exc
+
+    key = f"{model_size}:{device}"
+    model = _WHISPER_MODELS.get(key)
+    if model is None:
+        compute_type = "float32" if device == "cpu" else "float16"
+        model = WhisperModel(model_size, device=device, compute_type=compute_type)
+        _WHISPER_MODELS[key] = model
+
+    segments, _ = model.transcribe(
+        path,
+        language=language,
+        vad_filter=True,
+        beam_size=5,
+        temperature=0.0,
+    ) if language else model.transcribe(
+        path,
+        vad_filter=True,
+        beam_size=5,
+        temperature=0.0,
+    )
+    return " ".join((segment.text or "").strip() for segment in segments).strip()
+
+
 def transcribe_audio_bytes(
     audio_bytes: bytes,
     model_size: str = "small",
@@ -173,7 +216,7 @@ def transcribe_audio_bytes(
         tmp_file.write(audio_bytes)
         tmp_file.flush()
         tmp_file.close()
-        return transcribe_audio(tmp_file.name, model_size=model_size, device=device, language=language)
+        return transcribe_audio_file(tmp_file.name, model_size=model_size, device=device, language=language)
     finally:
         with contextlib.suppress(OSError):
             os.remove(tmp_file.name)

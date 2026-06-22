@@ -1,6 +1,6 @@
 # RAG Voice Agent
 
-This project combines retrieval-augmented generation with a voice interface. It records speech, transcribes it with STT, retrieves relevant context from Pinecone, answers with the LLM, and can speak the final response back through ElevenLabs TTS.
+This project combines retrieval-augmented generation with a voice interface. It can record speech, transcribe it with STT, retrieve relevant context from Pinecone, answer with the LLM, and can speak the final response back through ElevenLabs TTS.
 
 It can be used either from the terminal (`voice_agent.py`) or from a Streamlit web app (`streamlit_app.py`) with an upload tab and a record button.
 
@@ -94,9 +94,12 @@ streamlit run streamlit_app.py
 This opens a two-tab interface:
 
 1. **Upload tab** — upload PDF or image files. Each file is chunked and indexed into Pinecone (the same index used by the CLI's `index` command, under the `default` namespace), so it becomes searchable by the voice agent immediately. Image text is pulled out with OCR (Tesseract), so a photo of a page or a scanned document works the same as a real PDF, quality permitting.
-2. **Voice Agent tab** — click the record control to capture your question with your browser's microphone, then click "Transcribe and answer." The app transcribes your speech, retrieves the most relevant chunks from whatever you've uploaded, asks the LLM for an answer, and (if the "Speak the answer" box is checked) plays back the answer using ElevenLabs.
+2. **Ask the agent tab** — choose one of three input modes:
+   - **Voice**: capture a question with Streamlit's built-in browser microphone control, then transcribe and answer on the server.
+   - **Audio upload**: upload a WAV, MP3, M4A, OGG, WEBM, or FLAC file and let the server transcribe it.
+   - **Text**: type a question directly and skip STT entirely.
 
-This uses Streamlit's built-in `st.audio_input`, so there's no separate device-selection step like the CLI's `--input-device` flag — it uses whatever microphone your browser is granted permission to use.
+All three modes share the same retrieval and answer pipeline, so this works well when the browser microphone is unavailable or blocked in a hosted AWS deployment.
 
 ## Output Flow
 
